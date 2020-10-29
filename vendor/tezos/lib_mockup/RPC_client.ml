@@ -29,7 +29,6 @@ type rpc_error =
   | Rpc_generic_error
   | Rpc_not_found of string option
   | Rpc_unauthorized
-  | Rpc_unexpected_type_of_failure
   | Rpc_cannot_parse_path
   | Rpc_cannot_parse_query
   | Rpc_cannot_parse_body
@@ -64,30 +63,24 @@ let rpc_error_encoding =
         (fun () -> Rpc_unauthorized);
       case
         (Tag 3)
-        ~title:"Rpc_unexpected_type_of_failure"
-        (obj1 (req "kind" (constant "rpc_unexpected_failure")))
-        (function Rpc_unexpected_type_of_failure -> Some () | _ -> None)
-        (fun () -> Rpc_unexpected_type_of_failure);
-      case
-        (Tag 4)
         ~title:"Rpc_cannot_parse_path"
         (obj1 (req "kind" (constant "rpc_cannot_parse")))
         (function Rpc_cannot_parse_path -> Some () | _ -> None)
         (fun () -> Rpc_cannot_parse_path);
       case
-        (Tag 5)
+        (Tag 4)
         ~title:"Rpc_cannot_parse_query"
         (obj1 (req "kind" (constant "rpc_cannot_query")))
         (function Rpc_cannot_parse_query -> Some () | _ -> None)
         (fun () -> Rpc_cannot_parse_query);
       case
-        (Tag 6)
+        (Tag 5)
         ~title:"Rpc_cannot_parse_body"
         (obj1 (req "kind" (constant "rpc_cannot_body")))
         (function Rpc_cannot_parse_body -> Some () | _ -> None)
         (fun () -> Rpc_cannot_parse_body);
       case
-        (Tag 7)
+        (Tag 6)
         ~title:"Rpc_streams_not_handled"
         (obj1 (req "kind" (constant "rpc_streams_not_handled")))
         (function Rpc_streams_not_handled -> Some () | _ -> None)
@@ -130,42 +123,7 @@ class local_ctxt (base_dir : string) (mem_only : bool)
       base
       RPC_service.description_service
   in
-  let call_service_local (type p q i o)
-      (service : (_, _, p, q, i, o, _) Service.t) (params : p) (query : q)
-      (input : i) : o tzresult Lwt.t =
-    Directory.transparent_lookup directory service params query input
-    >>= fun res ->
-    match res with
-    | `Ok output ->
-        return output
-    | `Error (Some err) ->
-        Lwt.return (Error err)
-    | `Not_found (Some err) ->
-        Lwt.return (Error err)
-    | `Unauthorized (Some err) ->
-        Lwt.return (Error err)
-    | `Error None ->
-        fail (Local_RPC_error Rpc_generic_error)
-    | `Not_found None ->
-        let path = print_service service in
-        fail (Local_RPC_error (Rpc_not_found (Some path)))
-    | `Unauthorized None ->
-        fail (Local_RPC_error Rpc_unauthorized)
-    | _ ->
-        fail (Local_RPC_error Rpc_unexpected_type_of_failure)
-  in
-  let call_streamed_service_local :
-        'm 'p 'q 'i 'o.
-        (([< Resto.meth] as 'm), 'pr, 'p, 'q, 'i, 'o) RPC_service.t ->
-        on_chunk:('o -> unit) -> on_close:(unit -> unit) -> 'p -> 'q -> 'i ->
-        (unit -> unit) tzresult Lwt.t =
-   fun service ~on_chunk ~on_close params query input ->
-    call_service_local service params query input
-    >>=? fun result ->
-    on_chunk result ;
-    on_close () ;
-    return (fun () -> ())
-  in
+  let rpc_dir_ctxt = new Tezos_rpc.RPC_context.of_directory directory in
   let generic_json_call_stub :
       RPC_service.meth ->
       ?body:Data_encoding.json ->
@@ -176,7 +134,7 @@ class local_ctxt (base_dir : string) (mem_only : bool)
     (* This code is a ripoff of resto-cohttp-server/server.ml/callback *)
     (* let uri = Cohttp.Request.uri req in *)
     let path = Uri.pct_decode (Uri.path uri) in
-    let path = Resto_cohttp.Utils.split_path path in
+    let path = Resto.Utils.split_path path in
     Directory.lookup directory () meth path
     >>= fun result ->
     match result with
@@ -256,7 +214,7 @@ class local_ctxt (base_dir : string) (mem_only : bool)
           (params : p)
           (query : q)
           (input : i) ->
-        try call_service_local service params query input
+        try rpc_dir_ctxt#call_service service params query input
         with Not_found ->
           let description = print_service service in
           fail (Local_RPC_error (Rpc_not_found (Some description)))
@@ -266,7 +224,7 @@ class local_ctxt (base_dir : string) (mem_only : bool)
           (([< Resto.meth] as 'm), 'pr, 'p, 'q, 'i, 'o) RPC_service.t ->
           on_chunk:('o -> unit) -> on_close:(unit -> unit) -> 'p -> 'q -> 'i ->
           (unit -> unit) tzresult Lwt.t =
-      call_streamed_service_local
+      rpc_dir_ctxt#call_streamed_service
 
     method generic_json_call = generic_json_call_stub
   end
@@ -288,8 +246,6 @@ let () =
           Format.fprintf ppf ": RPC not found (%s)" desc
       | Rpc_unauthorized ->
           Format.fprintf ppf ": RPC unauthorized"
-      | Rpc_unexpected_type_of_failure ->
-          Format.fprintf ppf ": unexpected type of failure"
       | Rpc_cannot_parse_path ->
           Format.fprintf ppf ": cannot parse path"
       | Rpc_cannot_parse_query ->

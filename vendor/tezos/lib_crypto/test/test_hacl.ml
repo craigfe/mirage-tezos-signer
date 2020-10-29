@@ -238,36 +238,171 @@ let box () =
 
 let box = [("box", `Quick, box)]
 
-let keypair () =
+open Ed25519
+
+let test_keypair_ed25519 () =
   let seed = Hacl.Rand.gen 32 in
-  let sk = Sign.unsafe_sk_of_bytes seed in
-  let pk = Sign.neuterize sk in
-  let sk' = Sign.unsafe_sk_of_bytes seed in
-  let pk' = Sign.neuterize sk' in
-  Alcotest.(check bool "Sign.of_seed" true (Sign.equal pk pk')) ;
-  Alcotest.(check bool "Sign.of_seed" true (Sign.equal sk sk')) ;
-  let pk_bytes = Sign.unsafe_to_bytes pk in
-  let pk_bytes_length = Bytes.length pk_bytes in
-  Alcotest.(check int "Sign.to_bytes" Sign.pkbytes pk_bytes_length)
+  match (sk_of_bytes seed, sk_of_bytes seed) with
+  | (Some sk, Some sk') ->
+      let pk = neuterize sk in
+      let pk' = neuterize sk' in
+      Alcotest.(check bool "of_seed" true (Ed25519.equal pk pk')) ;
+      Alcotest.(check bool "of_seed" true (Ed25519.equal sk sk')) ;
+      let pk_bytes = to_bytes pk in
+      let pk_bytes_length = Bytes.length pk_bytes in
+      Alcotest.(check int "to_bytes" pk_size pk_bytes_length)
+  | _ ->
+      assert false
 
-let sign () =
-  let (pk, sk) = Sign.keypair () in
-  let signature = Bytes.create Sign.size in
-  Sign.sign ~sk ~msg ~signature ;
-  assert (Sign.verify ~pk ~msg ~signature)
+let test_sign_ed25519 () =
+  let (pk, sk) = keypair () in
+  let signature = sign ~sk ~msg in
+  assert (verify ~pk ~msg ~signature)
 
-let public () =
-  let (pk, sk) = Sign.keypair () in
-  let pk' = Sign.unsafe_to_bytes pk in
-  let ppk = Sign.(unsafe_to_bytes (neuterize pk)) in
-  let psk = Sign.(unsafe_to_bytes (neuterize sk)) in
+let test_public_ed25519 () =
+  let (pk, sk) = keypair () in
+  let pk' = to_bytes pk in
+  let ppk = to_bytes (neuterize pk) in
+  let psk = to_bytes (neuterize sk) in
   Alcotest.check check_bytes "public" pk' ppk ;
   Alcotest.check check_bytes "public" pk' psk
 
-let sign =
-  [ ("keypair", `Quick, keypair);
-    ("sign", `Quick, sign);
-    ("public", `Quick, public) ]
+let ed25519 =
+  [ ("keypair", `Quick, test_keypair_ed25519);
+    ("sign", `Quick, test_sign_ed25519);
+    ("public", `Quick, test_public_ed25519) ]
+
+open P256
+
+let nb_iterations = 10
+
+let checki = Alcotest.check Alcotest.int
+
+let test_export_p256 () =
+  let (pk, sk) = keypair () in
+  let sk_bytes = to_bytes sk in
+  let pk_bytes = to_bytes pk in
+  checki __LOC__ sk_size (Bytes.length sk_bytes) ;
+  checki __LOC__ pk_size (Bytes.length pk_bytes) ;
+  match (sk_of_bytes sk_bytes, pk_of_bytes pk_bytes) with
+  | (Some sk', Some pk') ->
+      let pk'' = neuterize pk' in
+      assert (equal sk sk') ;
+      assert (equal pk pk') ;
+      assert (equal pk pk'') ;
+      assert (equal pk' pk')
+  | _ ->
+      assert false
+
+let test_export_p256 () =
+  for _i = 0 to nb_iterations - 1 do
+    test_export_p256 ()
+  done
+
+let test_write_key_p256 () =
+  let (pk, sk) = keypair () in
+  let sk_bytes = to_bytes sk in
+  let pk_bytes = to_bytes pk in
+  let sk_buf = Bytes.create sk_size in
+  let pk_buf = Bytes.create pk_size in
+  blit_to_bytes sk sk_buf ;
+  blit_to_bytes pk pk_buf ;
+  assert (Bytes.equal sk_bytes sk_buf) ;
+  assert (Bytes.equal pk_bytes pk_buf)
+
+let test_write_key_pos_p256 () =
+  let pos = 42 in
+  let (pk, sk) = keypair () in
+  let sk_bytes = to_bytes sk in
+  let pk_bytes = to_bytes pk in
+  let sk_buf = Bytes.create (sk_size + pos) in
+  let pk_buf = Bytes.create (pk_size + pos) in
+  blit_to_bytes ~pos sk sk_buf ;
+  blit_to_bytes ~pos pk pk_buf ;
+  assert (Bytes.equal sk_bytes (Bytes.sub sk_buf pos sk_size)) ;
+  assert (Bytes.equal pk_bytes (Bytes.sub pk_buf pos pk_size))
+
+let test_write_key_with_ledger () =
+  (* This test simulates  the code in Ledger_commands.public_key_returning_instruction *)
+  let (pk, _) = keypair () in
+  let pk_bytes = to_bytes pk in
+  let buf = Bytes.create (pk_size + 1) in
+  match pk_of_bytes pk_bytes with
+  | None ->
+      Stdlib.failwith "Impossible to read P256 public key from Ledger"
+  | Some pk ->
+      TzEndian.set_int8 buf 0 2 ;
+      blit_to_bytes pk ~pos:1 buf ;
+      assert (Bytes.equal (Bytes.sub buf 1 pk_size) pk_bytes)
+
+let test_write_key_p256 () =
+  for _i = 0 to nb_iterations - 1 do
+    test_write_key_p256 () ;
+    test_write_key_pos_p256 () ;
+    test_write_key_with_ledger ()
+  done
+
+let test_keypair_p256 () =
+  let (pk, sk) = keypair () in
+  let pk' = neuterize sk in
+  assert (equal pk pk')
+
+let test_keypair_p256 () =
+  for _i = 0 to nb_iterations - 1 do
+    test_keypair_p256 ()
+  done
+
+let test_sign_p256 () =
+  let (pk, sk) = keypair () in
+  let signature = sign ~sk ~msg in
+  assert (verify ~pk ~msg ~signature)
+
+let test_sign_p256 () =
+  for _i = 0 to nb_iterations - 1 do
+    test_sign_p256 ()
+  done
+
+let test_vectors_p256 () =
+  let msgs = List.map of_hex Vectors_p256.msgs in
+  let keys =
+    List.map
+      (fun (sk, pk) ->
+        match (sk_of_bytes (of_hex sk), pk_of_bytes (of_hex pk)) with
+        | (Some sk, Some pk) ->
+            (sk, pk)
+        | _ ->
+            failwith "invalid key")
+      Vectors_p256.keys
+  in
+  let expected_sigs =
+    List.map
+      (fun block ->
+        List.map
+          (fun (r, s) ->
+            let r = of_hex r in
+            let s = of_hex s in
+            Bytes.cat r s)
+          block)
+      Vectors_p256.sigs
+  in
+  List.iter2
+    (fun (sk, pk) sigs ->
+      List.iter2
+        (fun msg s ->
+          assert (verify ~pk ~msg ~signature:s) ;
+          let signature = sign ~sk ~msg in
+          assert (verify ~pk ~msg ~signature))
+        msgs
+        sigs)
+    keys
+    expected_sigs
+
+let p256 =
+  [ ("export", `Quick, test_export_p256);
+    ("write_key", `Quick, test_write_key_p256);
+    ("keypair", `Quick, test_keypair_p256);
+    ("sign", `Quick, test_sign_p256);
+    ("test_vectors", `Quick, test_vectors_p256) ]
 
 let () =
   Alcotest.run
@@ -276,4 +411,5 @@ let () =
       ("blake2b", blake2b_tests);
       ("secretbox", secretbox);
       ("box", box);
-      ("sign", sign) ]
+      ("ed25519", ed25519);
+      ("p256", p256) ]

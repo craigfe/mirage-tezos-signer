@@ -32,4 +32,6 @@ module RPC_logging = Internal_event.Legacy_logging.Make (struct
   let name = "rpc"
 end)
 
-include Resto_cohttp_server.Server.Make (RPC_encoding) (RPC_logging)
+include Resto_cohttp_server_unix.Server_unix.Make (RPC_encoding) (RPC_logging)
+
+let launch = launch ?agent:None ?acl:None

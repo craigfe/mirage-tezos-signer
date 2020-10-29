@@ -9,3 +9,10 @@ vendors/
 .#*
 .*.swp
 **/.DS_Store
+
+src/bin_signer_mirage/myocamlbuild.ml
+src/bin_signer_mirage/main.ml
+src/bin_signer_mirage/key_gen.ml
+src/bin_signer_mirage/.mirage.config
+src/bin_signer_mirage/*.opam
+
